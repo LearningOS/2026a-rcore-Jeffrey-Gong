@@ -1,0 +1,20 @@
+{
+  "schema": 1,
+  "courseId": 2073,
+  "repository": "LearningOS/2026a-rcore-Jeffrey-Gong",
+  "user": "Jeffrey-Gong",
+  "totalScore": 500,
+  "chapters": {
+    "ch3": {
+      "points": "7/7",
+      "score": 100,
+      "commit": "72b6f232328222ec4bec0bab492a22dcf7c800a6"
+    }
+  },
+  "score": 100,
+  "upload": {
+    "status": "pending",
+    "runId": "41206322075",
+    "runAttempt": "1"
+  }
+}
