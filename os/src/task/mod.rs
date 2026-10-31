@@ -54,6 +54,7 @@ lazy_static! {
         let mut tasks = [TaskControlBlock {
             task_cx: TaskContext::zero_init(),
             task_status: TaskStatus::UnInit,
+            task_syscall_count: [0; 5],
         }; MAX_APP_NUM];
         for (i, task) in tasks.iter_mut().enumerate() {
             task.task_cx = TaskContext::goto_restore(init_app_cx(i));
@@ -135,6 +136,18 @@ impl TaskManager {
             panic!("All applications completed!");
         }
     }
+
+    fn increase_current_task_syscall_count(&self, i: usize) {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].task_syscall_count[i] = inner.tasks[current].task_syscall_count[i] + 1;
+    }
+
+    fn get_current_task_syscall_count(&self, i: usize) -> i32 {
+        let inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].task_syscall_count[i]
+    }
 }
 
 /// Run the first task in task list.
@@ -168,4 +181,39 @@ pub fn suspend_current_and_run_next() {
 pub fn exit_current_and_run_next() {
     mark_current_exited();
     run_next_task();
+}
+
+/// write syscall
+const SYSCALL_WRITE: usize = 64;
+/// exit syscall
+const SYSCALL_EXIT: usize = 93;
+/// yield syscall
+const SYSCALL_YIELD: usize = 124;
+/// gettime syscall
+const SYSCALL_GET_TIME: usize = 169;
+/// trace syscall
+const SYSCALL_TRACE: usize = 410;
+
+/// 
+pub fn increase_current_task_syscall_count(syscall_id: usize) {
+    match syscall_id {
+        SYSCALL_WRITE => TASK_MANAGER.increase_current_task_syscall_count(0),
+        SYSCALL_EXIT => TASK_MANAGER.increase_current_task_syscall_count(1),
+        SYSCALL_YIELD => TASK_MANAGER.increase_current_task_syscall_count(2),
+        SYSCALL_GET_TIME => TASK_MANAGER.increase_current_task_syscall_count(3),
+        SYSCALL_TRACE => TASK_MANAGER.increase_current_task_syscall_count(4),
+        _ => panic!("Unsupported syscall_id: {}", syscall_id),
+    }
+}
+
+/// 
+pub fn get_current_task_syscall_count(syscall_id: usize) -> i32 {
+    match syscall_id {
+        SYSCALL_WRITE => TASK_MANAGER.get_current_task_syscall_count(0),
+        SYSCALL_EXIT => TASK_MANAGER.get_current_task_syscall_count(1),
+        SYSCALL_YIELD => TASK_MANAGER.get_current_task_syscall_count(2),
+        SYSCALL_GET_TIME => TASK_MANAGER.get_current_task_syscall_count(3),
+        SYSCALL_TRACE => TASK_MANAGER.get_current_task_syscall_count(4),
+        _ => panic!("Unsupported syscall_id: {}", syscall_id),
+    }
 }
