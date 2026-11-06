@@ -15,6 +15,7 @@ mod switch;
 mod task;
 
 use crate::loader::{get_app_data, get_num_app};
+use crate::mm::{MapPermission, VirtAddr};
 use crate::sync::UPSafeCell;
 use crate::trap::TrapContext;
 use alloc::vec::Vec;
@@ -153,6 +154,27 @@ impl TaskManager {
             panic!("All applications completed!");
         }
     }
+
+    fn increase_current_task_syscall_count(&self, id: usize) {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        let map = &mut inner.tasks[current].task_syscall_count;
+        let v = map.get(&id).unwrap_or(&0) + 1;
+        map.insert(id, v);
+    }
+
+    fn get_current_task_syscall_count(&self, id: usize) -> i32 {
+        let inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        let map = &inner.tasks[current].task_syscall_count;
+        *map.get(&id).unwrap_or(&0)
+    }
+
+    fn insert_framed_area_into_current_task(&self, start_va: VirtAddr, end_va: VirtAddr, permission: MapPermission) {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].memory_set.insert_framed_area(start_va, end_va, permission);
+    }
 }
 
 /// Run the first task in task list.
@@ -201,4 +223,19 @@ pub fn current_trap_cx() -> &'static mut TrapContext {
 /// Change the current 'Running' task's program break
 pub fn change_program_brk(size: i32) -> Option<usize> {
     TASK_MANAGER.change_current_program_brk(size)
+}
+
+/// 
+pub fn increase_current_task_syscall_count(syscall_id: usize) {
+    TASK_MANAGER.increase_current_task_syscall_count(syscall_id);
+}
+
+/// 
+pub fn get_current_task_syscall_count(syscall_id: usize) -> i32 {
+    TASK_MANAGER.get_current_task_syscall_count(syscall_id)
+}
+
+/// 
+pub fn insert_framed_area_into_current_task(start_va: VirtAddr, end_va: VirtAddr, permission: MapPermission) {
+    TASK_MANAGER.insert_framed_area_into_current_task(start_va, end_va, permission);
 }
