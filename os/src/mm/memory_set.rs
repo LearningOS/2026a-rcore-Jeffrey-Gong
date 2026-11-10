@@ -72,6 +72,15 @@ impl MemorySet {
             self.areas.remove(idx);
         }
     }
+    /// 
+    pub fn unmap_vpn(&mut self, vpn: VirtPageNum) -> bool {
+        if let Some((_, area)) = self.areas.iter_mut().enumerate().find(|(_, area)| area.includes(vpn)) {
+            area.unmap_one(&mut self.page_table, vpn);
+            true
+        } else {
+            false
+        }
+    }
     /// Add a new MapArea into this MemorySet.
     /// Assuming that there are no conflicts in the virtual address
     /// space.
@@ -399,6 +408,14 @@ impl MapArea {
             }
             current_vpn.step();
         }
+    }
+    pub fn includes(&self, vpn: VirtPageNum) -> bool {
+        for v in self.vpn_range {
+            if vpn == v {
+                return true;
+            }
+        }
+        false
     }
 }
 
