@@ -4,11 +4,12 @@ use alloc::sync::Arc;
 
 use crate::{
     fs::{open_file, OpenFlags},
-    mm::{translated_refmut, translated_str},
+    mm::{translated_refmut, translated_str, MapPermission, VirtAddr, VirtPageNum},
     task::{
         add_task, current_task, current_user_token, exit_current_and_run_next,
         suspend_current_and_run_next,
     },
+    timer::get_time_us,
 };
 
 #[repr(C)]
@@ -105,30 +106,84 @@ pub fn sys_waitpid(pid: isize, exit_code_ptr: *mut i32) -> isize {
 /// YOUR JOB: get time with second and microsecond
 /// HINT: You might reimplement it with virtual memory management.
 /// HINT: What if [`TimeVal`] is splitted by two pages ?
-pub fn sys_get_time(_ts: *mut TimeVal, _tz: usize) -> isize {
+pub fn sys_get_time(ts: *mut TimeVal, _tz: usize) -> isize {
     trace!(
-        "kernel:pid[{}] sys_get_time NOT IMPLEMENTED",
+        "kernel:pid[{}] sys_get_time",
         current_task().unwrap().pid.0
     );
-    -1
+    let us = get_time_us();
+    let ptr = translated_refmut(current_user_token(), ts);
+    *ptr = TimeVal {
+        sec: us / 1_000_000,
+        usec: us % 1_000_000,
+    };
+    0
 }
 
 /// YOUR JOB: Implement mmap.
-pub fn sys_mmap(_start: usize, _len: usize, _port: usize) -> isize {
+pub fn sys_mmap(start: usize, len: usize, port: usize) -> isize {
     trace!(
-        "kernel:pid[{}] sys_mmap NOT IMPLEMENTED",
+        "kernel:pid[{}] sys_mmap",
         current_task().unwrap().pid.0
     );
-    -1
+    let va = VirtAddr::from(start);
+    if !va.aligned() || port & !0x7 != 0 || port & 0x7 == 0 {
+        return -1;
+    }
+
+    // 查找 [start, start + len) 中是否存在已经被映射的页
+    let task = current_task().unwrap();
+    let mut task_inner = task.inner_exclusive_access();
+    let memory_set = &mut task_inner.memory_set;
+    let vpn_start = VirtPageNum::from(va);
+    let vpn_end = VirtPageNum::from(VirtAddr::from(start + len).ceil());
+    for v in vpn_start.0..vpn_end.0 {
+        let vpn = VirtPageNum::from(v);
+        if let Some(pte) = memory_set.translate(vpn) {
+            if pte.is_valid() {
+                return -1;
+            }
+        }
+    }
+
+    let mut permission = MapPermission::U;
+    if (port >> 0) & 1 == 1 {
+        permission |= MapPermission::R;
+    }
+    if (port >> 1) & 1 == 1 {
+        permission |= MapPermission::W;
+    }
+    if (port >> 2) & 1 == 1 {
+        permission |= MapPermission::X;
+    }
+
+    memory_set.insert_framed_area(vpn_start.into(), vpn_end.into(), permission);
+    0
 }
 
 /// YOUR JOB: Implement munmap.
-pub fn sys_munmap(_start: usize, _len: usize) -> isize {
+pub fn sys_munmap(start: usize, len: usize) -> isize {
     trace!(
-        "kernel:pid[{}] sys_munmap NOT IMPLEMENTED",
+        "kernel:pid[{}] sys_munmap",
         current_task().unwrap().pid.0
     );
-    -1
+    let va = VirtAddr::from(start);
+    if !va.aligned() {
+        return -1;
+    }
+
+    let task = current_task().unwrap();
+    let mut task_inner = task.inner_exclusive_access();
+    let memory_set = &mut task_inner.memory_set;
+    let start_vpn = VirtPageNum::from(va);
+    let end_vpn = VirtPageNum::from(VirtAddr::from(start + len).ceil());
+    for v in start_vpn.0..end_vpn.0 {
+        let vpn = VirtPageNum::from(v);
+        if !memory_set.unmap_vpn(vpn) {
+            return -1;
+        }
+    }
+    0
 }
 
 /// change data segment size
@@ -143,19 +198,45 @@ pub fn sys_sbrk(size: i32) -> isize {
 
 /// YOUR JOB: Implement spawn.
 /// HINT: fork + exec =/= spawn
-pub fn sys_spawn(_path: *const u8) -> isize {
+pub fn sys_spawn(path: *const u8) -> isize {
     trace!(
-        "kernel:pid[{}] sys_spawn NOT IMPLEMENTED",
+        "kernel:pid[{}] sys_spawn",
         current_task().unwrap().pid.0
     );
-    -1
+    let token = current_user_token();
+    let path = translated_str(token, path);
+    let data = match open_file(path.as_str(), OpenFlags::RDONLY) {
+        Some(v) => v.read_all(),
+        None => return -1,
+    };
+
+    let current_task = current_task().unwrap();
+    let new_task = current_task.fork();
+    let new_pid = new_task.pid.0;
+    // modify trap context of new_task, because it returns immediately after switching
+    let trap_cx = new_task.inner_exclusive_access().get_trap_cx();
+    // we do not have to move to next instruction since we have done it before
+    // for child process, fork returns 0
+    trap_cx.x[10] = 0;
+
+    new_task.exec(data.as_slice());
+
+    // add new task to scheduler
+    add_task(new_task);
+    new_pid as isize
 }
 
 // YOUR JOB: Set task priority.
-pub fn sys_set_priority(_prio: isize) -> isize {
+pub fn sys_set_priority(prio: isize) -> isize {
     trace!(
-        "kernel:pid[{}] sys_set_priority NOT IMPLEMENTED",
+        "kernel:pid[{}] sys_set_priority",
         current_task().unwrap().pid.0
     );
-    -1
+    if prio <= 1 {
+        return -1;
+    }
+    let task = current_task().unwrap();
+    let mut task_inner = task.inner_exclusive_access();
+    task_inner.priority = prio as u64;
+    prio
 }

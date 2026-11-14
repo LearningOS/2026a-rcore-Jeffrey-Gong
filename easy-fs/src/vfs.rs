@@ -138,6 +138,93 @@ impl Inode {
         )))
         // release efs lock automatically by compiler
     }
+    /// Crate inode with `new_name` under current inode whose `disk_inode` is identical to `old_name`'s
+    pub fn link(&self, old_name: &str, new_name: &str) -> Option<Arc<Inode>> {
+        let mut fs: MutexGuard<'_, EasyFileSystem> = self.fs.lock();
+        let inode_id = match self.read_disk_inode(|disk_inode| {
+            self.find_inode_id(old_name, disk_inode)
+        }) {
+            Some(v) => v,
+            None => return None,
+        };
+        self.modify_disk_inode(|disk_inode| {
+            // append file in the dirent
+            let file_count = (disk_inode.size as usize) / DIRENT_SZ;
+            let new_size = (file_count + 1) * DIRENT_SZ;
+            // increase size
+            self.increase_size(new_size as u32, disk_inode, &mut fs);
+            // write dirent
+            let dirent = DirEntry::new(new_name, inode_id);
+            disk_inode.write_at(
+                file_count * DIRENT_SZ,
+                dirent.as_bytes(),
+                &self.block_device,
+            );
+        });
+
+        drop(fs);
+        let inode = self.find(old_name).unwrap();
+        Some(Arc::new(Self::new(
+            inode.block_id as u32,
+            inode.block_offset,
+            self.fs.clone(),
+            self.block_device.clone(),
+        )))
+    }
+    /// Remove entry with `name` (override with empty `DirEntry`) under current inode
+    pub fn unlink(&self, name: &str) {
+        let _fs: MutexGuard<'_, EasyFileSystem> = self.fs.lock();
+        self.modify_disk_inode(|disk_inode| {
+            let file_count = (disk_inode.size as usize) / DIRENT_SZ;
+            for i in 0..file_count {
+                let mut dirent = DirEntry::empty();
+                assert_eq!(
+                    disk_inode.read_at(i * DIRENT_SZ, dirent.as_bytes_mut(), &self.block_device),
+                    DIRENT_SZ,
+                );
+                if dirent.name() == name {
+                    disk_inode.write_at(i * DIRENT_SZ, DirEntry::empty().as_bytes(), &self.block_device);
+                }
+            }
+        });
+    }
+    /// Get link count under current inode
+    pub fn nlink(&self, inode_number: u32) -> u32 {
+        let _fs: MutexGuard<'_, EasyFileSystem> = self.fs.lock();
+        self.modify_disk_inode(|disk_inode| {
+            let file_count = (disk_inode.size as usize) / DIRENT_SZ;
+            let mut count = 0;
+            for i in 0..file_count {
+                let mut dirent = DirEntry::empty();
+                assert_eq!(
+                    disk_inode.read_at(i * DIRENT_SZ, dirent.as_bytes_mut(), &self.block_device),
+                    DIRENT_SZ,
+                );
+                if dirent.inode_id() == inode_number {
+                    count += 1;
+                }
+            }
+            count
+        })
+    }
+    ///
+    pub fn is_dir(&self) -> bool {
+        self.read_disk_inode(|disk_inode| disk_inode.is_dir())
+    }
+    ///
+    pub fn is_file(&self) -> bool {
+        self.read_disk_inode(|disk_inode| disk_inode.is_file())
+    }
+    /// Get id of current inode
+    pub fn inode_id(&self) -> u32 {
+        let fs = self.fs.lock();
+        let inode_size = core::mem::size_of::<DiskInode>();
+        let inodes_per_block = crate::BLOCK_SZ / inode_size;
+        let (start_block, _) = fs.get_disk_inode_pos(0);
+
+        ((self.block_id - start_block as usize) * inodes_per_block
+            + self.block_offset / inode_size) as u32
+    }
     /// List inodes under current inode
     pub fn ls(&self) -> Vec<String> {
         let _fs = self.fs.lock();
